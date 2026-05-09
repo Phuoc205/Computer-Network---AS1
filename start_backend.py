@@ -58,9 +58,17 @@ if __name__ == "__main__":
         default=PORT,
         help='Port number to bind the server. Default is {}.'.format(PORT)
     )
+    parser.add_argument(
+        '--mode',
+        type=str,
+        default='threading',
+        choices=['threading', 'callback', 'coroutine'],
+        help='Concurrency mode for the backend (threading, callback, coroutine). Default is threading.'
+    )
  
     args = parser.parse_args()
     ip = args.server_ip
     port = args.server_port
+    mode = args.mode
 
-    create_backend(ip, port)
+    create_backend(ip, port, mode=mode)
