@@ -105,17 +105,37 @@ class HttpAdapter:
         # Response handler
         resp = self.response
 
+        # Ensure routes are available
+        if not routes:
+            routes = self.routes
+
         # Handle the request
         msg = conn.recv(1024).decode()
         req.prepare(msg, routes)
+        
+        # Read remaining body if needed
+        content_length = int(req.headers.get('content-length', 0))
+        if len(req.body) < content_length:
+            remaining = content_length - len(req.body)
+            while remaining > 0:
+                chunk = conn.recv(min(remaining, 4096))
+                if not chunk:
+                    break
+                req.body += chunk.decode('utf-8', errors='ignore')
+                remaining -= len(chunk)
+
         print("[HttpAdapter] Invoke handle_client connection {}".format(addr))
 
         # Handle request hook
         if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
+            print("[HttpAdapter] Executing app hook for {} {}".format(req.method, req.path))
+            if inspect.iscoroutinefunction(req.hook):
+                hook_result = asyncio.run(req.hook(req.headers, req.body))
+            else:
+                hook_result = req.hook(req.headers, req.body)
+            response = resp.build_response(req, envelop_content=hook_result)
+        else:
+            response = resp.build_response(req)
 
         #print("[HttpAdapter] Response content {}".format(response))
         conn.sendall(response)
@@ -137,32 +157,38 @@ class HttpAdapter:
         req = self.request
         # Response handler
         resp = self.response
+        routes = self.routes
 
-        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
-        addr = writer.get_extra_info("peername")
-
+        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(writer.get_extra_info("peername")))
+        
         # TODO Handle the request asynchronously
         msg = await reader.read(1024)
+        req.prepare(msg.decode("utf-8"), routes)
 
-
-        req.prepare(msg.decode("utf-8"), routes={})
+        # Read remaining body if needed
+        content_length = int(req.headers.get('content-length', 0))
+        if len(req.body) < content_length:
+             remaining = content_length - len(req.body)
+             body_bytes = await reader.readexactly(remaining)
+             req.body += body_bytes.decode('utf-8', errors='ignore')
 
         # Handle request hook
         if req.hook:
-            #
-            # TODO: handle for App hook here
-            #
-            response = ""
-
-        # Build response
-        #print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
-        response = resp.build_response(req)
+            print("[HttpAdapter] Executing async app hook for {} {}".format(req.method, req.path))
+            if inspect.iscoroutinefunction(req.hook):
+                hook_result = await req.hook(req.headers, req.body)
+            else:
+                hook_result = req.hook(req.headers, req.body)
+            response = resp.build_response(req, envelop_content=hook_result)
+        else:
+            response = resp.build_response(req)
 
         # Send all the response asynchronously
         writer.write(response)
         await writer.drain()
+        writer.close()
+        await writer.wait_closed()
 
-    @property
     def extract_cookies(self, req, resp):
         """
         Build cookies from the :class:`Request <Request>` headers.
@@ -172,11 +198,11 @@ class HttpAdapter:
         :rtype: cookies - A dictionary of cookie key-value pairs.
         """
         cookies = {}
-        for header in headers:
-            if header.startswith("Cookie:"):
-                cookie_str = header.split(":", 1)[1].strip()
-                for pair in cookie_str.split(";"):
-                    key, value = pair.strip().split("=")
+        cookie_header = req.headers.get("cookie")
+        if cookie_header:
+            for pair in cookie_header.split(";"):
+                if "=" in pair:
+                    key, value = pair.strip().split("=", 1)
                     cookies[key] = value
         return cookies
 

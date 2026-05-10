@@ -89,20 +89,21 @@ def handle_client_callback(server, ip, port,conn, addr, routes):
 
 
 # Coroutine async/await for handling new client
-async def handle_client_coroutine(reader, writer):
+async def handle_client_coroutine(reader, writer, routes):
     """
     Coroutine in async communication to initialize connection instance
     then delegates the client handling logic to it.
 
     :param reader (StreamReader): Stream reader wrapper.
     :param writer (StreamWriter): Stream writer wrapper.
+    :param routes (dict): Dictionary of route handlers.
     """
     addr = writer.get_extra_info("peername")
     print("[Backend] Accepted coroutine connection from {}".format(addr))
 
     try:
         # We pass None for ip, port, conn, connaddr as HttpAdapter uses reader/writer here
-        daemon = HttpAdapter(None, None, None, addr, {}) 
+        daemon = HttpAdapter(None, None, None, addr, routes) 
         await daemon.handle_client_coroutine(reader, writer)
     except Exception as e:
         print("[Backend] Coroutine error: {}".format(e))
@@ -121,9 +122,12 @@ async def async_server(ip="0.0.0.0", port=7000, routes={}):
                isCoFunc += "**ASYNC** "
             print("   + ('{}', '{}'): {}{}".format(key[0], key[1], isCoFunc, str(value)))
 
-    async_server = await asyncio.start_server(handle_client_coroutine, ip, port)
-    async with async_server:
-        await async_server.serve_forever()
+    srv = await asyncio.start_server(
+        lambda r, w: handle_client_coroutine(r, w, routes), 
+        ip, port
+    )
+    async with srv:
+        await srv.serve_forever()
     return
 
 

@@ -56,13 +56,13 @@ class Request():
         #: HTTP URL to send the request to.
         self.url = None
         #: dictionary of HTTP headers.
-        self.headers = None
+        self.headers = CaseInsensitiveDict()
         #: HTTP path
         self.path = None        
         # The cookies set used to create Cookie header
         self.cookies = None
         #: request body to send to the server.
-        self.body = None
+        self.body = ""
         # The raw header
         self._raw_headers = None
         #: The raw body
@@ -81,7 +81,7 @@ class Request():
             if path == '/':
                 path = '/index.html'
         except Exception:
-            return None, None
+            return None, None, None
 
         return method, path, version
              
@@ -112,6 +112,15 @@ class Request():
         self.method, self.path, self.version = self.extract_request_line(request)
         print("[Request] {} path {} version {}".format(self.method, self.path, self.version))
 
+        # Split header and body
+        headers_str, body_str = self.fetch_headers_body(request)
+        self._raw_headers = headers_str
+        self._raw_body = body_str
+        self.body = body_str
+        
+        # Parse headers
+        self.headers = CaseInsensitiveDict(self.prepare_headers(headers_str))
+
         #
         # @bksysnet Preapring the webapp hook with AsynapRous instance
         # The default behaviour with HTTP server is empty routed
@@ -119,18 +128,18 @@ class Request():
         # TODO manage the webapp hook in this mounting point
         #
         
-        if not routes == {}:
+        if routes:
             self.routes = routes
-            print("[Request] Routing METHOD {} path {}".format(self.method, self.path))
+            print("[Request] Routing table size: {}".format(len(self.routes)))
+            print("[Request] Looking for route: ({}, {})".format(self.method, self.path))
             self.hook = routes.get((self.method, self.path))
-            print("[Request] Hook has request {}".format(request))
-            #
-            # self.hook manipulation goes here
-            # ...
-            #
+            if self.hook:
+                print("[Request] Route found! Hook: {}".format(self.hook))
+            else:
+                print("[Request] No route found in table.")
+        else:
+            print("[Request] No routes provided to prepare.")
 
-        self._raw_heaers = ""
-        self._raw_body =  ""
         cookies = self.headers.get('cookie', '')
             #
             #  TODO: implement the cookie function here
@@ -139,8 +148,8 @@ class Request():
         return
 
     def prepare_body(self, data, files, json=None):
+        self.body = data
         self.prepare_content_length(self.body)
-        self.body = body
         #
         # TODO prepare the request authentication
         #
@@ -149,11 +158,10 @@ class Request():
 
 
     def prepare_content_length(self, body):
-        self.headers["Content-Length"] = "0"
-        #
-        # TODO prepare the request authentication
-        #
-	# self.auth = ...
+        if body:
+            self.headers["Content-Length"] = str(len(body))
+        else:
+            self.headers["Content-Length"] = "0"
         return
 
 

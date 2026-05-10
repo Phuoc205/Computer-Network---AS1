@@ -214,6 +214,18 @@ class Response():
         return len(content), content
 
 
+    HTTP_STATUS_CODES = {
+        200: "OK",
+        201: "Created",
+        202: "Accepted",
+        204: "No Content",
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        500: "Internal Server Error",
+    }
+
     def build_response_header(self, request):
         """
         Constructs the HTTP response headers based on the class:`Request <Request>
@@ -226,39 +238,25 @@ class Response():
         reqhdr = request.headers
         rsphdr = self.headers
 
+        status_code = self.status_code or 200
+        reason = self.reason or self.HTTP_STATUS_CODES.get(status_code, "Unknown")
+
         #Build dynamic headers
         headers = {
-                "Accept": "{}".format(reqhdr.get("Accept", "application/json")),
-                "Accept-Language": "{}".format(reqhdr.get("Accept-Language", "en-US,en;q=0.9")),
-                "Authorization": "{}".format(reqhdr.get("Authorization", "Basic <credentials>")),
-                "Cache-Control": "no-cache",
-                "Content-Type": "{}".format(self.headers['Content-Type']),
-                "Content-Length": "{}".format(len(self._content)),
-        #       "Cookie": "{}".format(reqhdr.get("Cookie", "sessionid=xyz789")), #dummy cooki
-        #
-        # TODO prepare the request authentication
-        #
-        #       self.auth = ...
                 "Date": "{}".format(datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")),
-                "Max-Forward": "10",
-                "Pragma": "no-cache",
-                "Proxy-Authorization": "Basic dXNlcjpwYXNz",  # example base64
-                "Warning": "199 Miscellaneous warning",
-                "User-Agent": "{}".format(reqhdr.get("User-Agent", "Chrome/123.0.0.0")),
+                "Server": "bksysnet@hcmut/1.0",
+                "Content-Type": "{}".format(self.headers.get('Content-Type', 'text/html')),
+                "Content-Length": "{}".format(len(self._content) if self._content else 0),
+                "Connection": "close",
             }
 
-        # Header text alignment
-            #
-            #  TODO: implement the header building to create formated
-            #        header from the provied headers
-            #
-            #
-            # TODO prepare the request authentication
-            #
-            # self.auth = ...
+        header_lines = ["HTTP/1.1 {} {}".format(status_code, reason)]
+        for key, value in headers.items():
+            header_lines.append("{}: {}".format(key, value))
+        
+        fmt_header = "\r\n".join(header_lines) + "\r\n\r\n"
 
-
-        return str(fmt_header).encode('utf-8')
+        return fmt_header.encode('utf-8')
 
 
     def build_notfound(self):
@@ -290,6 +288,13 @@ class Response():
         """
         print("[Response] Start build response with req {}".format(request))
 
+        if envelop_content is not None:
+            self._content = envelop_content
+            if not self.headers.get('Content-Type'):
+                 self.headers['Content-Type'] = 'application/json'
+            self._header = self.build_response_header(request)
+            return self._header + self._content
+
         path = request.path
 
         mime_type = self.get_mime_type(path)
@@ -302,14 +307,22 @@ class Response():
             base_dir = self.prepare_content_type(mime_type = 'text/html')
         elif mime_type == 'text/css':
             base_dir = self.prepare_content_type(mime_type = 'text/css')
+        elif mime_type.startswith('image/'):
+             base_dir = self.prepare_content_type(mime_type = mime_type)
         elif mime_type == 'application/json' or mime_type == 'application/octet-stream':
             base_dir = self.prepare_content_type(mime_type = 'application/json')
             envelop_content = ""
-
-        #
-        # TODO: add support objects
-        #
         else:
             return self.build_notfound()
+
+        # Build content
+        content_len, content = self.build_content(path, base_dir)
+        if content_len == -1:
+            return self.build_notfound()
+        
+        self._content = content
+        
+        # Build header
+        self._header = self.build_response_header(request)
 
         return self._header + self._content
