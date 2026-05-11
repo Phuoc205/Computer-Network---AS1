@@ -1,0 +1,326 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hybrid Chat</title>
+    <link rel="stylesheet" href="/css/styles.css?v=20260511">
+</head>
+<body class="chat-page">
+    <main class="chat-shell">
+        <aside class="chat-sidebar">
+            <div class="peer-block">
+                <span class="label">Current peer</span>
+                <strong id="peerName">unknown</strong>
+                <small id="peerAddress">not connected</small>
+            </div>
+
+            <section>
+                <div class="section-title">Channels</div>
+                <div id="channelList" class="channel-list"></div>
+                <form id="joinForm" class="inline-form">
+                    <input id="joinChannelInput" type="text" placeholder="channel name">
+                    <button type="submit">Join</button>
+                </form>
+            </section>
+
+            <section>
+                <div class="section-title">Peers</div>
+                <button id="refreshPeers" type="button" class="wide-button">Refresh online peers</button>
+                <div id="peerList" class="peer-list"></div>
+            </section>
+        </aside>
+
+        <section class="chat-panel">
+            <header class="chat-header">
+                <div>
+                    <span class="label">Active channel</span>
+                    <h1 id="activeChannel">general</h1>
+                </div>
+                <div id="statusText" class="status-text">Ready</div>
+            </header>
+
+            <div id="messageList" class="message-list" aria-live="polite"></div>
+
+            <form id="messageForm" class="message-form">
+                <input id="targetInput" type="text" placeholder="recipient username">
+                <input id="messageInput" type="text" placeholder="write a message">
+                <button type="submit">Send</button>
+                <button id="broadcastButton" type="button">Broadcast</button>
+            </form>
+        </section>
+
+        <aside class="notification-panel">
+            <div class="notification-header">
+                <div class="section-title">Notifications</div>
+                <button id="clearNotifications" type="button">Clear notifications</button>
+            </div>
+            <div id="notificationList" class="notification-list"></div>
+        </aside>
+    </main>
+
+    <script>
+        let activeChannel = "general";
+        let knownPeers = [];
+        let currentPeer = "";
+
+        function setStatus(text) {
+            document.getElementById("statusText").textContent = text;
+        }
+
+        function getAuthHeader() {
+            let username = sessionStorage.getItem("chatAuthUser");
+            let password = sessionStorage.getItem("chatAuthPassword");
+
+            if (!username || !password) {
+                username = window.prompt("Username", "admin") || "";
+                password = window.prompt("Password") || "";
+                sessionStorage.setItem("chatAuthUser", username);
+                sessionStorage.setItem("chatAuthPassword", password);
+            }
+
+            return "Basic " + btoa(username + ":" + password);
+        }
+
+        async function api(path, options = {}) {
+            const headers = options.headers || {};
+            headers.Authorization = getAuthHeader();
+            if (options.body && !headers["Content-Type"]) {
+                headers["Content-Type"] = "application/json";
+            }
+
+            const response = await fetch(path, {
+                ...options,
+                headers,
+                credentials: "same-origin",
+            });
+
+            if (!response.ok) {
+                if (response.status === 401) {
+                    sessionStorage.removeItem("chatAuthUser");
+                    sessionStorage.removeItem("chatAuthPassword");
+                }
+                throw new Error("HTTP " + response.status);
+            }
+            return response.json();
+        }
+
+        function renderChannels(channels) {
+            const list = document.getElementById("channelList");
+            list.innerHTML = "";
+            channels.forEach((channel) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = channel === activeChannel ? "active" : "";
+                button.textContent = "#" + channel;
+                button.onclick = () => {
+                    activeChannel = channel;
+                    document.getElementById("activeChannel").textContent = channel;
+                    loadMessages();
+                    renderChannels(channels);
+                };
+                list.appendChild(button);
+            });
+        }
+
+        function renderMessages(messages) {
+            const list = document.getElementById("messageList");
+            list.innerHTML = "";
+
+            if (!messages.length) {
+                const empty = document.createElement("div");
+                empty.className = "empty-state";
+                empty.textContent = "No messages in this channel yet.";
+                list.appendChild(empty);
+                return;
+            }
+
+            messages.forEach((message) => {
+                const item = document.createElement("article");
+                item.className = "message " + (message.direction || "incoming");
+
+                const meta = document.createElement("div");
+                meta.className = "message-meta";
+                meta.textContent = `${message.from || "unknown"} -> ${message.to || "*"} | ${message.type || "direct"}`;
+
+                const body = document.createElement("p");
+                body.textContent = message.message || "";
+
+                item.appendChild(meta);
+                item.appendChild(body);
+                list.appendChild(item);
+            });
+            list.scrollTop = list.scrollHeight;
+        }
+
+        function renderNotifications(notifications) {
+            const list = document.getElementById("notificationList");
+            list.innerHTML = "";
+
+            if (!notifications.length) {
+                const empty = document.createElement("div");
+                empty.className = "empty-state";
+                empty.textContent = "No new notifications.";
+                list.appendChild(empty);
+                return;
+            }
+
+            notifications.slice().reverse().forEach((notification) => {
+                const item = document.createElement("div");
+                item.className = "notification";
+                item.textContent = `${notification.from} in #${notification.channel}: ${notification.message}`;
+                list.appendChild(item);
+            });
+        }
+
+        function renderPeers(peers) {
+            const list = document.getElementById("peerList");
+            list.innerHTML = "";
+
+            const availablePeers = peers.filter((peer) => peer.username !== currentPeer);
+            if (!availablePeers.length) {
+                const empty = document.createElement("div");
+                empty.className = "empty-state";
+                empty.textContent = "No other peers online.";
+                list.appendChild(empty);
+                return;
+            }
+
+            availablePeers.forEach((peer) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.textContent = `${peer.username} (${peer.status})`;
+                button.onclick = () => {
+                    document.getElementById("targetInput").value = peer.username;
+                };
+                list.appendChild(button);
+            });
+        }
+
+        async function loadPeerInfo() {
+            const info = await api("/peer-info");
+            currentPeer = info.username;
+            document.getElementById("peerName").textContent = info.username;
+            document.getElementById("peerAddress").textContent = `${info.ip}:${info.port}`;
+        }
+
+        async function loadChannels() {
+            const data = await api("/channels");
+            renderChannels(data.channels || []);
+        }
+
+        async function loadMessages() {
+            const data = await api("/messages?channel=" + encodeURIComponent(activeChannel));
+            renderMessages(data.messages || []);
+        }
+
+        async function loadNotifications() {
+            const data = await api("/notifications");
+            renderNotifications(data.notifications || []);
+        }
+
+        async function loadPeers() {
+            const data = await api("/peers");
+            knownPeers = data.peers || [];
+            renderPeers(knownPeers);
+        }
+
+        async function refreshAll() {
+            try {
+                await loadPeerInfo();
+                await loadChannels();
+                await loadMessages();
+                await loadNotifications();
+                await loadPeers();
+                setStatus("Updated");
+            } catch (error) {
+                setStatus(error.message);
+            }
+        }
+
+        document.getElementById("messageForm").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const target = document.getElementById("targetInput").value.trim();
+            const message = document.getElementById("messageInput").value.trim();
+            if (!target || !message) {
+                setStatus("Choose a peer and enter a message");
+                return;
+            }
+
+            try {
+                await api("/direct-message", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        to: target,
+                        channel: activeChannel,
+                        message,
+                    }),
+                });
+                document.getElementById("messageInput").value = "";
+                await refreshAll();
+                setStatus("Message sent");
+            } catch (error) {
+                setStatus(error.message);
+            }
+        });
+
+        document.getElementById("broadcastButton").addEventListener("click", async () => {
+            const message = document.getElementById("messageInput").value.trim();
+            if (!message) {
+                setStatus("Enter a message");
+                return;
+            }
+
+            try {
+                await api("/broadcast-peer", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        channel: activeChannel,
+                        message,
+                    }),
+                });
+                document.getElementById("messageInput").value = "";
+                await refreshAll();
+                setStatus("Broadcast sent");
+            } catch (error) {
+                setStatus(error.message);
+            }
+        });
+
+        document.getElementById("joinForm").addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const channel = document.getElementById("joinChannelInput").value.trim();
+            if (!channel) {
+                return;
+            }
+
+            try {
+                await api("/join-channel", {
+                    method: "POST",
+                    body: JSON.stringify({ channel }),
+                });
+                activeChannel = channel;
+                document.getElementById("activeChannel").textContent = channel;
+                document.getElementById("joinChannelInput").value = "";
+                await refreshAll();
+                setStatus("Joined #" + channel);
+            } catch (error) {
+                setStatus(error.message);
+            }
+        });
+
+        document.getElementById("refreshPeers").addEventListener("click", loadPeers);
+        document.getElementById("clearNotifications").addEventListener("click", async () => {
+            await api("/notifications/clear", { method: "POST" });
+            await loadNotifications();
+        });
+
+        refreshAll();
+        setInterval(() => {
+            loadMessages().catch(() => {});
+            loadNotifications().catch(() => {});
+        }, 2500);
+    </script>
+</body>
+</html>
+
