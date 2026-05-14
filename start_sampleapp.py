@@ -36,7 +36,7 @@ PORT = 2026  # Default port
 if __name__ == "__main__":
     # Parse command-line arguments to configure server IP and port
     parser = argparse.ArgumentParser(prog='Backend', description='', epilog='Beckend daemon')
-    parser.add_argument('--server-ip', default='0.0.0.0')
+    parser.add_argument('--server-ip', default='127.0.0.1')
     parser.add_argument('--server-port', type=int, default=PORT)
     parser.add_argument(
         '--role',
