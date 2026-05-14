@@ -274,10 +274,20 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         return tracker_data.get("peers", [])
 
     def find_peer(target_username):
-        for peer in get_tracker_peers():
-            if peer.get("username") == target_username:
-                return peer
-        return None
+        # Attempt to refresh the peer list from the tracker
+        try:
+            peers_list = get_tracker_peers()
+            for p in peers_list:
+                uname = p.get("username")
+                if uname:
+                    # Update local cache with fresh info from tracker
+                    state["known_peers"][uname] = p
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # Tracker is offline, we will rely on our local cache
+            print("[SampleApp Peer] Tracker offline, using cached peer list for '{}'".format(target_username))
+
+        # Return from local cache (which may have been updated above)
+        return state["known_peers"].get(target_username)
 
     @peer_app.route("/send-peer", methods=["POST"], auth=True)
     def send_peer(headers=None, body=None):
@@ -291,6 +301,15 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
             return _error("Missing or invalid from")
         if not _valid_message(message):
             return _error("Missing or invalid message")
+
+        # Cache sender info if provided to allow P2P reply without tracker
+        if data.get("from_ip") and data.get("from_port"):
+            state["known_peers"][sender] = {
+                "username": sender,
+                "ip": data.get("from_ip"),
+                "port": data.get("from_port"),
+                "status": "online"
+            }
 
         item = {
             "from": sender,
@@ -351,6 +370,8 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
         item = {
             "from": state["username"],
+            "from_ip": state["ip"],
+            "from_port": state["port"],
             "to": receiver,
             "channel": channel,
             "message": message,
@@ -366,6 +387,19 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         state["messages"].append(sent_item)
         return {"ok": True, "sent_to": receiver}
 
+    def get_all_peers():
+        # Attempt to refresh the peer list from the tracker
+        try:
+            peers_list = get_tracker_peers()
+            for p in peers_list:
+                uname = p.get("username")
+                if uname:
+                    state["known_peers"][uname] = p
+        except (urllib.error.URLError, TimeoutError, OSError):
+            print("[SampleApp Peer] Tracker offline, using cached peer list for broadcast")
+        
+        return list(state["known_peers"].values())
+
     @peer_app.route("/broadcast-peer", methods=["POST"], auth=True)
     def broadcast_peer(headers=None, body=None):
         data = _json_body(body)
@@ -379,8 +413,8 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         channel = data.get("channel", "general")
         try:
             ensure_channel(channel)
-            peers = get_tracker_peers()
-        except (ValueError, urllib.error.URLError, TimeoutError, OSError) as exc:
+            peers = get_all_peers()
+        except ValueError as exc:
             return _error(str(exc))
 
         timestamp = data.get("timestamp", _now())
@@ -402,6 +436,8 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
                 continue
             payload = {
                 "from": state["username"],
+                "from_ip": state["ip"],
+                "from_port": state["port"],
                 "to": target_username,
                 "channel": channel,
                 "message": message,
@@ -472,10 +508,7 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
     @peer_app.route("/peers", methods=["GET"], auth=True)
     def peers(headers=None, body=None):
-        try:
-            return {"peers": get_tracker_peers()}
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return _error("Cannot get peer list: {}".format(exc))
+        return {"peers": get_all_peers()}
 
     register_with_tracker()
     return peer_app
