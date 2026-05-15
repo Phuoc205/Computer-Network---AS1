@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -25,6 +25,11 @@
             </section>
 
             <section>
+                <div class="section-title">Direct Messages</div>
+                <div id="privateList" class="channel-list"></div>
+            </section>
+
+            <section>
                 <div class="section-title">Peers</div>
                 <button id="refreshPeers" type="button" class="wide-button">Refresh online peers</button>
                 <div id="peerList" class="peer-list"></div>
@@ -34,8 +39,8 @@
         <section class="chat-panel">
             <header class="chat-header">
                 <div>
-                    <span class="label">Active channel</span>
-                    <h1 id="activeChannel">general</h1>
+                    <span class="label">Active Conversation</span>
+                    <h1 id="activeChannel">Select a contact</h1>
                 </div>
                 <div id="statusText" class="status-text">Ready</div>
             </header>
@@ -60,7 +65,8 @@
     </main>
 
     <script>
-        let activeChannel = "general";
+        let activeChannel = null;
+        let activePrivateContact = null;
         let knownPeers = [];
         let currentPeer = "";
 
@@ -111,13 +117,46 @@
             channels.forEach((channel) => {
                 const button = document.createElement("button");
                 button.type = "button";
-                button.className = channel === activeChannel ? "active" : "";
-                button.textContent = "#" + channel;
+                button.className = (activeChannel === channel && !activePrivateContact) ? "active" : "";
+                button.textContent = "# " + channel;
                 button.onclick = () => {
                     activeChannel = channel;
-                    document.getElementById("activeChannel").textContent = channel;
+                    activePrivateContact = null;
+                    document.getElementById("activeChannel").textContent = "# " + channel;
+                    document.getElementById("targetInput").value = "";
                     loadMessages();
                     renderChannels(channels);
+                    // Re-render DMs to clear highlight
+                    api("/messages").then(data => renderPrivateContacts(data.messages || []));
+                };
+                list.appendChild(button);
+            });
+        }
+
+        function renderPrivateContacts(messages) {
+            const list = document.getElementById("privateList");
+            const contacts = new Set();
+            messages.forEach(m => {
+                if (m.is_private) {
+                    if (m.from !== currentPeer) contacts.add(m.from);
+                    if (m.to !== currentPeer && m.to !== "*") contacts.add(m.to);
+                }
+            });
+
+            list.innerHTML = "";
+            contacts.forEach((contact) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = (activePrivateContact === contact) ? "active" : "";
+                button.textContent = "@ " + contact;
+                button.onclick = () => {
+                    activePrivateContact = contact;
+                    activeChannel = null;
+                    document.getElementById("activeChannel").textContent = "@ " + contact;
+                    document.getElementById("targetInput").value = contact;
+                    loadMessages();
+                    renderPrivateContacts(messages);
+                    loadChannels(); // refresh channel list highlight
                 };
                 list.appendChild(button);
             });
@@ -126,22 +165,36 @@
         function renderMessages(messages) {
             const list = document.getElementById("messageList");
             list.innerHTML = "";
+            
+            renderPrivateContacts(messages);
 
-            if (!messages.length) {
+            let displayMessages = [];
+            if (activePrivateContact) {
+                displayMessages = messages.filter(m => 
+                    m.is_private && (m.from === activePrivateContact || m.to === activePrivateContact)
+                );
+            } else if (activeChannel) {
+                displayMessages = messages.filter(m => 
+                    !m.is_private && m.channel === activeChannel
+                );
+            }
+
+            if (!displayMessages.length) {
                 const empty = document.createElement("div");
                 empty.className = "empty-state";
-                empty.textContent = "No messages in this channel yet.";
+                empty.textContent = "No messages here yet.";
                 list.appendChild(empty);
                 return;
             }
 
-            messages.forEach((message) => {
+            displayMessages.forEach((message) => {
                 const item = document.createElement("article");
                 item.className = "message " + (message.direction || "incoming");
 
                 const meta = document.createElement("div");
                 meta.className = "message-meta";
-                meta.textContent = `${message.from || "unknown"} -> ${message.to || "*"} | ${message.type || "direct"}`;
+                const typeLabel = message.is_private ? "private" : (message.type || "direct");
+                meta.textContent = `${message.from || "unknown"} -> ${message.to || "*"} | ${typeLabel}`;
 
                 const body = document.createElement("p");
                 body.textContent = message.message || "";
@@ -168,7 +221,8 @@
             notifications.slice().reverse().forEach((notification) => {
                 const item = document.createElement("div");
                 item.className = "notification";
-                item.textContent = `${notification.from} in #${notification.channel}: ${notification.message}`;
+                const context = notification.is_private ? "privately" : ("in #" + notification.channel);
+                item.textContent = `${notification.from} ${context}: ${notification.message}`;
                 list.appendChild(item);
             });
         }
@@ -191,7 +245,11 @@
                 button.type = "button";
                 button.textContent = `${peer.username} (${peer.status})`;
                 button.onclick = () => {
+                    activePrivateContact = peer.username;
+                    activeChannel = null;
+                    document.getElementById("activeChannel").textContent = "@ " + peer.username;
                     document.getElementById("targetInput").value = peer.username;
+                    loadMessages();
                 };
                 list.appendChild(button);
             });
@@ -210,7 +268,7 @@
         }
 
         async function loadMessages() {
-            const data = await api("/messages?channel=" + encodeURIComponent(activeChannel));
+            const data = await api("/messages");
             renderMessages(data.messages || []);
         }
 
@@ -232,6 +290,16 @@
                 await loadMessages();
                 await loadNotifications();
                 await loadPeers();
+                
+                if (!activeChannel && !activePrivateContact) {
+                    const data = await api("/channels");
+                    if (data.channels && data.channels.length > 0) {
+                        activeChannel = data.channels[0];
+                        document.getElementById("activeChannel").textContent = "# " + activeChannel;
+                        loadMessages();
+                    }
+                }
+
                 setStatus("Updated");
             } catch (error) {
                 setStatus(error.message);
@@ -254,6 +322,7 @@
                         to: target,
                         channel: activeChannel,
                         message,
+                        is_private: !!activePrivateContact
                     }),
                 });
                 if (result.ok === false) {
@@ -312,7 +381,8 @@
                     return;
                 }
                 activeChannel = channel;
-                document.getElementById("activeChannel").textContent = channel;
+                activePrivateContact = null;
+                document.getElementById("activeChannel").textContent = "# " + channel;
                 document.getElementById("joinChannelInput").value = "";
                 await refreshAll();
                 setStatus("Joined #" + channel);
@@ -335,4 +405,3 @@
     </script>
 </body>
 </html>
-

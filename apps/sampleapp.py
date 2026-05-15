@@ -236,7 +236,7 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         "port": peer_port,
         "tracker_ip": tracker_ip,
         "tracker_port": tracker_port,
-        "channels": ["general"],
+        "channels": [],
         "messages": [],
         "notifications": [],
         "known_peers": {},
@@ -297,6 +297,9 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
         sender = data.get("from")
         message = data.get("message")
+        is_private = data.get("is_private", False)
+        channel = data.get("channel")
+
         if not _valid_username(sender):
             return _error("Missing or invalid from")
         if not _valid_message(message):
@@ -314,24 +317,27 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         item = {
             "from": sender,
             "to": data.get("to", state["username"]),
-            "channel": data.get("channel", "general"),
+            "channel": channel,
             "message": message,
             "timestamp": data.get("timestamp", _now()),
             "direction": "incoming",
+            "is_private": is_private,
         }
         if data.get("type"):
             item["type"] = data.get("type")
 
-        try:
-            ensure_channel(item["channel"])
-        except ValueError as exc:
-            return _error(str(exc))
+        if not is_private and channel:
+            try:
+                ensure_channel(channel)
+            except ValueError as exc:
+                return _error(str(exc))
 
         state["messages"].append(item)
         state["notifications"].append({
             "type": "new_message",
             "from": item["from"],
-            "channel": item["channel"],
+            "channel": item["channel"] if not is_private else None,
+            "is_private": is_private,
             "message": item["message"],
             "timestamp": item["timestamp"],
         })
@@ -345,6 +351,8 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
         receiver = data.get("to")
         message = data.get("message")
+        is_private = data.get("is_private", True)
+        
         if not _valid_username(receiver):
             return _error("Missing or invalid to")
         if receiver == state["username"]:
@@ -359,14 +367,15 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
         if peer is None:
             return _error("Peer '{}' not found".format(receiver))
-        if peer.get("status") != "online":
-            return _error("Peer '{}' is offline".format(receiver))
-
-        channel = data.get("channel", "general")
-        try:
-            ensure_channel(channel)
-        except ValueError as exc:
-            return _error(str(exc))
+        
+        if not is_private:
+            channel = data.get("channel", "general")
+            try:
+                ensure_channel(channel)
+            except ValueError as exc:
+                return _error(str(exc))
+        else:
+            channel = None
 
         item = {
             "from": state["username"],
@@ -376,7 +385,9 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
             "channel": channel,
             "message": message,
             "timestamp": data.get("timestamp", _now()),
+            "is_private": is_private,
         }
+        
         try:
             _post_json(peer.get("ip"), peer.get("port"), "/send-peer", item, auth_header=auth_header)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -410,7 +421,7 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         if not _valid_message(message):
             return _error("Missing or invalid message")
 
-        channel = data.get("channel", "general")
+        channel = data.get("channel")
         try:
             ensure_channel(channel)
             peers = get_all_peers()
@@ -468,10 +479,20 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
     @peer_app.route("/messages", methods=["GET"], auth=True)
     def messages(headers=None, body=None, query=None):
-        channel = (query or {}).get("channel")
-        if channel:
-            return {"messages": [m for m in state["messages"] if m.get("channel") == channel]}
-        return {"messages": state["messages"]}
+        query = query or {}
+        is_private = query.get("is_private") == "true"
+        contact = query.get("with")
+        channel = query.get("channel")
+
+        filtered = state["messages"]
+        if is_private:
+            filtered = [m for m in filtered if m.get("is_private")]
+            if contact:
+                filtered = [m for m in filtered if m.get("from") == contact or m.get("to") == contact]
+        elif channel:
+            filtered = [m for m in filtered if not m.get("is_private") and m.get("channel") == channel]
+        
+        return {"messages": filtered}
 
     @peer_app.route("/channels", methods=["GET"], auth=True)
     def channels(headers=None, body=None):
