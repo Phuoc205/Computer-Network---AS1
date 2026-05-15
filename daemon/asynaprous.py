@@ -114,18 +114,19 @@ class AsynapRous:
                return sync_wrapper
         return decorator
 
-    def run(self):
+    def run(self, mode="threading"):
         """
         Start the backend server and begin handling requests.
 
         This method launches the TCP server using the configured IP and port,
         and dispatches incoming requests to the registered route handlers.
 
+        :param mode (str): The concurrency mode ("threading", "callback", "coroutine").
         :raise: Error if IP or port has not been configured.
         """
         if not self.ip or not self.port:
             print("Rous app need to preapre address"
                   "by calling app.prepare_address(ip,port)")
 
-        create_backend(self.ip, self.port, self.routes)
+        create_backend(self.ip, self.port, self.routes, mode=mode)
         

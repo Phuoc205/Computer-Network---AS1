@@ -57,6 +57,13 @@ if __name__ == "__main__":
         default=os.environ.get('CHAT_AUTH_PASSWORD', 'password'),
         help='Basic Auth password for protected peer APIs.',
     )
+    parser.add_argument(
+        '--mode',
+        type=str,
+        default='threading',
+        choices=['threading', 'callback', 'coroutine'],
+        help='Concurrency mode for the backend (threading, callback, coroutine). Default is threading.'
+    )
  
     args = parser.parse_args()
     ip = args.server_ip
@@ -72,4 +79,5 @@ if __name__ == "__main__":
         tracker_port=args.tracker_port,
         auth_user=args.auth_user,
         auth_password=args.auth_password,
+        mode=args.mode,
     )

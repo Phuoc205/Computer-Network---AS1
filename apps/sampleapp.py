@@ -523,6 +523,7 @@ def create_sampleapp(
     tracker_port=8000,
     auth_user="admin",
     auth_password="password",
+    mode="threading",
 ):
     # Prepare and launch the RESTful application
     if role == "sample":
@@ -545,4 +546,4 @@ def create_sampleapp(
         raise ValueError("Unsupported sample app role: {}".format(role))
 
     selected_app.prepare_address(ip, port)
-    selected_app.run()
+    selected_app.run(mode=mode)

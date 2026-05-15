@@ -1,7 +1,11 @@
 @echo off
 title Hybrid Chat App Runner
 
-echo Starting Hybrid Chat App Infrastructure...
+:: Set default mode or use provided argument
+set MODE=%1
+if "%MODE%"=="" set MODE=threading
+
+echo Starting Hybrid Chat App Infrastructure in %MODE% mode...
 
 :: Kill existing processes on these ports (8000, 9001, 9002, 8080)
 echo Cleaning up existing ports...
@@ -11,25 +15,25 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 :9001 :9002 :8080" ^| 
 
 :: 1. Start Tracker Server in a new window
 echo [1/4] Starting Tracker on port 8000...
-start "Tracker" cmd /k "python start_sampleapp.py --role tracker --server-ip 127.0.0.1 --server-port 8000"
+start "Tracker" cmd /k "python start_sampleapp.py --role tracker --server-ip 127.0.0.1 --server-port 8000 --mode %MODE%"
 
 :: Wait for tracker to initialize
 timeout /t 2 /nobreak > nul
 
 :: 2. Start Peer Alice
 echo [2/4] Starting Peer Alice on port 9001...
-start "Alice" cmd /k "python start_sampleapp.py --role peer --username alice --server-ip 127.0.0.1 --server-port 9001 --tracker-ip 127.0.0.1"
+start "Alice" cmd /k "python start_sampleapp.py --role peer --username alice --server-ip 127.0.0.1 --server-port 9001 --tracker-ip 127.0.0.1 --mode %MODE%"
 
 :: 3. Start Peer Bob
 echo [3/4] Starting Peer Bob on port 9002...
-start "Bob" cmd /k "python start_sampleapp.py --role peer --username bob --server-port 9002 --tracker-ip 127.0.0.1"
+start "Bob" cmd /k "python start_sampleapp.py --role peer --username bob --server-port 9002 --tracker-ip 127.0.0.1 --mode %MODE%"
 
 :: 4. Start Proxy Server
 echo [4/4] Starting Proxy Server on port 8080...
 start "Proxy" cmd /k "python start_proxy.py --server-ip 127.0.0.1"
 
 echo ------------------------------------------------
-echo All systems started in separate windows!
+echo All systems started in separate windows using %MODE% mode!
 echo - Tracker: http://127.0.0.1:8000
 echo - Alice:   http://127.0.0.1:9001/chat.html (admin:password)
 echo - Bob:     http://127.0.0.1:9002/chat.html (admin:password)
