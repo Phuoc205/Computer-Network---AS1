@@ -352,9 +352,65 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
         receiver = data.get("to")
         message = data.get("message")
         is_private = data.get("is_private", True)
+        channel = data.get("channel")
         
-        if not _valid_username(receiver):
-            return _error("Missing or invalid to")
+        if not _valid_message(message):
+            return _error("Missing or invalid message")
+
+        if not receiver:
+            if not channel:
+                return _error("Missing recipient or channel")
+            
+            # Channel broadcast: send to all peers who are in this channel
+            try:
+                ensure_channel(channel)
+                peers = get_all_peers()
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                return _error("Error getting peers or invalid channel: {}".format(exc))
+
+            timestamp = _now()
+            sent_item = {
+                "from": state["username"],
+                "from_ip": state["ip"],
+                "from_port": state["port"],
+                "to": "*",
+                "channel": channel,
+                "message": message,
+                "timestamp": timestamp,
+                "is_private": False,
+                "direction": "outgoing",
+            }
+            state["messages"].append(sent_item)
+
+            sent_count = 0
+            for peer in peers:
+                target_username = peer.get("username")
+                if target_username == state["username"]:
+                    continue
+                
+                # Only send to peers who have joined this channel
+                peer_channels = peer.get("channels", [])
+                if channel not in peer_channels:
+                    continue
+
+                payload = {
+                    "from": state["username"],
+                    "from_ip": state["ip"],
+                    "from_port": state["port"],
+                    "to": target_username,
+                    "channel": channel,
+                    "message": message,
+                    "timestamp": timestamp,
+                    "is_private": False,
+                }
+                try:
+                    _post_json(peer.get("ip"), peer.get("port"), "/send-peer", payload, auth_header=auth_header)
+                    sent_count += 1
+                except Exception:
+                    pass # Best effort for channel broadcast
+            
+            return {"ok": True, "sent_to_count": sent_count}
+
         if receiver == state["username"]:
             return _error("Cannot send direct message to self")
         if not _valid_message(message):
@@ -423,12 +479,15 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
 
         channel = data.get("channel")
         try:
-            ensure_channel(channel)
+            if channel:
+                ensure_channel(channel)
             peers = get_all_peers()
         except ValueError as exc:
             return _error(str(exc))
 
         timestamp = data.get("timestamp", _now())
+        # Locally we still track it as a broadcast for clarity, 
+        # but recipients will see it as private.
         state["messages"].append({
             "from": state["username"],
             "to": "*",
@@ -437,6 +496,7 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
             "timestamp": timestamp,
             "direction": "outgoing",
             "type": "broadcast",
+            "is_private": True,
         })
 
         sent = []
@@ -454,12 +514,14 @@ def _create_peer_app(username, peer_ip, peer_port, tracker_ip, tracker_port, aut
                 "message": message,
                 "timestamp": timestamp,
                 "type": "broadcast",
+                "is_private": True, # Receivers see it as a private message
             }
             try:
                 _post_json(peer.get("ip"), peer.get("port"), "/send-peer", payload, timeout=3, auth_header=auth_header)
                 sent.append(target_username)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 failed.append({"username": target_username, "error": str(exc)})
+        
         return {"ok": True, "sent": sent, "failed": failed}
 
     @peer_app.route("/connect-peer", methods=["POST"], auth=True)

@@ -310,8 +310,14 @@
             event.preventDefault();
             const target = document.getElementById("targetInput").value.trim();
             const message = document.getElementById("messageInput").value.trim();
-            if (!target || !message) {
-                setStatus("Choose a peer and enter a message");
+            
+            if (!message) {
+                setStatus("Enter a message");
+                return;
+            }
+
+            if (!target && !activeChannel) {
+                setStatus("Choose a peer or channel");
                 return;
             }
 
